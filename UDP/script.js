@@ -9,9 +9,9 @@ const udpSocket = dgram.createSocket('udp4');
 
 // PID Controller Parameters - Tuned values
 const PID = {
-    Kp: 10,      // Proportional gain
-    Ki: 0.3,     // Integral gain
-    Kd: 0.4,     // Derivative gain
+    Kp: 1.7,      // Proportional gain
+    Ki: 0.03,     // Integral gain
+    Kd: 0.17,     // Derivative gain
     min_pwm: 12,  // Minimum PWM to overcome static friction
     max_pwm: 50,  // Maximum PWM output
     stop_margin: 0.017,  // ~1 degree
