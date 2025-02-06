@@ -7,19 +7,21 @@ const path = require('path');
 
 const udpSocket = dgram.createSocket('udp4');
 
-// PID Controller Parameters
+// PID Controller Parameters - Tuned values
 const PID = {
-    Kp: 5,
-    Ki: 0.6,
-    Kd: 0.17,
-    min_pwm: 5,
-    max_pwm: 50,
-    stop_margin: 0.017,
+    Kp: 10,      // Proportional gain
+    Ki: 0.3,     // Integral gain
+    Kd: 0.4,     // Derivative gain
+    min_pwm: 12,  // Minimum PWM to overcome static friction
+    max_pwm: 50,  // Maximum PWM output
+    stop_margin: 0.017,  // ~1 degree
     integral: 0,
     prev_error: 0,
     prev_time: Date.now(),
     target_angle: null,
-    current_angle: 0
+    current_angle: 0,
+    integral_window: [],  // For windowed integral control
+    max_integral: 5.0    // Anti-windup limit
 };
 
 // Store device information
@@ -51,28 +53,75 @@ function calculatePID(targetAngle, currentAngle) {
     }
 
     const current_time = Date.now();
-    const dt = (current_time - PID.prev_time) / 1000;
+    const dt = (current_time - PID.prev_time) / 1000;  // Convert to seconds
     const error = targetAngle - currentAngle;
 
-    // Don't stop when reaching target, let it stabilize naturally
-    const maxIntegral = 10;
-    if (Math.abs(error) > PID.stop_margin * 2) {
-        PID.integral += error * dt;
-        PID.integral = Math.max(Math.min(PID.integral, maxIntegral), -maxIntegral);
+    // Anti-windup: Only accumulate integral when within reasonable range
+    const maxIntegralError = 1.0; // About 57 degrees
+    if (Math.abs(error) < maxIntegralError) {
+        // Windowed integral control
+        PID.integral_window.push({ error: error, dt: dt });
+        if (PID.integral_window.length > 30) { // Keep last 30 samples
+            PID.integral_window.shift();
+        }
+        
+        // Calculate integral over window
+        PID.integral = PID.integral_window.reduce((sum, sample) => 
+            sum + sample.error * sample.dt, 0);
+        
+        // Apply anti-windup limit
+        PID.integral = Math.max(Math.min(PID.integral, PID.max_integral), -PID.max_integral);
     } else {
+        // Reset integral when error is too large
         PID.integral = 0;
+        PID.integral_window = [];
     }
 
+    // Calculate derivative with filtering
     const derivative = dt > 0 ? (error - PID.prev_error) / dt : 0;
+    
+    // PID output calculation
     let output = (PID.Kp * error) + (PID.Ki * PID.integral) + (PID.Kd * derivative);
+
+    // Dynamic PWM scaling based on error magnitude
+    const errorDegrees = Math.abs(error * 180 / Math.PI);
+    let maxPwm;
     
-    // Dynamic PWM scaling
-    const errorMagnitude = Math.abs(error);
-    const dynamicMaxPwm = errorMagnitude > 0.5 ? PID.max_pwm : PID.max_pwm * 0.6;
-    output = Math.min(Math.max(output, -dynamicMaxPwm), dynamicMaxPwm);
-    
+    if (errorDegrees > 30) {
+        // Full power for large errors
+        maxPwm = PID.max_pwm;
+    } else if (errorDegrees > 10) {
+        // Reduced power for medium errors
+        maxPwm = PID.max_pwm * 0.7;
+    } else {
+        // Fine control for small errors
+        maxPwm = PID.max_pwm * 0.4;
+    }
+
+    // Minimum PWM handling
+    if (Math.abs(error) > PID.stop_margin) {
+        // Ensure minimum PWM for movement
+        if (Math.abs(output) < PID.min_pwm) {
+            output = Math.sign(output) * PID.min_pwm;
+        }
+        // Ensure PWM direction matches error direction
+        if (Math.sign(output) !== Math.sign(error)) {
+            output = Math.sign(error) * PID.min_pwm;
+        }
+    }
+
+    // Final output limiting
+    output = Math.min(Math.max(output, -maxPwm), maxPwm);
+
+    // Stop condition
+    if (Math.abs(error) < PID.stop_margin) {
+        output = 0;
+    }
+
     PID.prev_error = error;
     PID.prev_time = current_time;
+
+    console.log(`Error: ${(error * 180 / Math.PI).toFixed(2)}°, PWM: ${output.toFixed(2)}, I: ${PID.integral.toFixed(2)}, D: ${derivative.toFixed(2)}`);
 
     return {
         pwm: Math.round(output),
@@ -139,7 +188,9 @@ wss.on('connection', (ws, req) => {
                     PID.target_angle = setpoint * Math.PI / 180;
                     deviceState.hasSetpoint = true;
                     
+                    // Reset PID state for new setpoint
                     PID.integral = 0;
+                    PID.integral_window = [];
                     PID.prev_error = 0;
                     PID.prev_time = Date.now();
 
@@ -172,7 +223,7 @@ wss.on('connection', (ws, req) => {
                     const currentAngle = parseFloat(message);
                     if (!isNaN(currentAngle)) {
                         PID.current_angle = currentAngle;
-                        console.log(`Position feedback: ${currentAngle * 180 / Math.PI}°`);
+                        console.log(`Position feedback: ${(currentAngle * 180 / Math.PI).toFixed(2)}°`);
                         
                         // Broadcast position to all web clients
                         webClients.forEach(client => {
@@ -183,7 +234,6 @@ wss.on('connection', (ws, req) => {
                         
                         if (deviceState.hasSetpoint) {
                             const pidOutput = calculatePID(PID.target_angle, PID.current_angle);
-                            // Always send command to maintain position
                             sendUDPCommand(pidOutput.pwm);
                         }
                     }
