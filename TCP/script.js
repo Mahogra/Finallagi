@@ -10,7 +10,7 @@ const webClients = new Set();
 // PID Controller Parameters
 const PID = {
     Kp: 5,
-    Ki: 0.6,
+    Ki: 0.1,
     Kd: 0.17,
     min_pwm: 10,
     max_pwm: 50,
@@ -44,14 +44,15 @@ function calculatePID(targetAngle, currentAngle) {
 
     let pwm = Math.abs(error) * PID.Kp;
     pwm = Math.min(Math.max(pwm, PID.min_pwm), PID.max_pwm);
-    pwm *= Math.sign(error);
+    pwm *= Math.sign(error); // Memastikan PWM memiliki arah sesuai error
 
     return {
         pwm: Math.round(pwm),
-        error: error,
-        atTarget: Math.abs(error) <= PID.stop_margin
+       
+        error: error
     };
 }
+
 
 const serverHandler = async (ws, req) => {
     const clientId = req.socket.remoteAddress;
