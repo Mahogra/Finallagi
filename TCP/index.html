@@ -221,7 +221,7 @@
 
             // Continue for 2 seconds after reaching setpoint
             if (reachedSetpoint && (time - setpointReachedTime) >= 2.0) {
-                ws.close();
+
                 showStatus('Target reached and stabilized', 'success');
             }
         }
