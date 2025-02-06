@@ -9,8 +9,8 @@ const webClients = new Set();
 
 // PID Controller Parameters
 const PID = {
-    Kp: 5,
-    Ki: 0.1,
+    Kp: 1.7,
+    Ki: 0.03,
     Kd: 0.17,
     min_pwm: 10,
     max_pwm: 50,
