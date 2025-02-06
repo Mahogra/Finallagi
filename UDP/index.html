@@ -100,7 +100,10 @@
         let currentSetpoint = 0;
         let reachedSetpoint = false;
         let setpointReachedTime = null;
-        const maxDataPoints = 200;  // Increased for smoother graph
+        let stableCount = 0;
+        const maxDataPoints = 300;  // Increased for longer history
+        const requiredStableCount = 20; // Number of stable readings required
+        const stabilityThreshold = 0.5; // Degrees
         
         function initChart() {
             const ctx = document.getElementById('motorGraph').getContext('2d');
@@ -116,7 +119,7 @@
                             borderWidth: 2,
                             tension: 0.3,
                             fill: false,
-                            pointRadius: 0  // Hide points for smoother line
+                            pointRadius: 0
                         },
                         {
                             label: 'Setpoint',
@@ -126,7 +129,7 @@
                             borderDash: [5, 5],
                             tension: 0,
                             fill: false,
-                            pointRadius: 0  // Hide points for smoother line
+                            pointRadius: 0
                         }
                     ]
                 },
@@ -190,8 +193,8 @@
         }
 
         function updateChartScale(setpoint) {
-            const maxY = Math.max(setpoint * 2, 360);  // At least 360 degrees or 2x setpoint
-            const minY = -10;  // Keep small negative range for visualization
+            const maxY = Math.max(setpoint * 1.5, 360);
+            const minY = Math.min(-setpoint * 0.5, -60);
             
             chart.options.scales.y.max = maxY;
             chart.options.scales.y.min = minY;
@@ -199,12 +202,20 @@
         }
 
         function addData(time, actualPosition, targetPosition) {
-            if (!reachedSetpoint) {
-                const error = Math.abs(actualPosition - targetPosition);
-                if (error < 0.5) {  // Threshold for considering setpoint reached
+            const error = Math.abs(actualPosition - targetPosition);
+            
+            // Check stability
+            if (error < stabilityThreshold) {
+                stableCount++;
+                if (!reachedSetpoint && stableCount >= requiredStableCount) {
                     reachedSetpoint = true;
                     setpointReachedTime = time;
+                    showStatus('Target reached and stabilized', 'success');
                 }
+            } else {
+                stableCount = 0;
+                reachedSetpoint = false;
+                setpointReachedTime = null;
             }
 
             chart.data.labels.push(time);
@@ -219,10 +230,18 @@
 
             chart.update('none');
 
-            // Continue for 2 seconds after reaching setpoint
-            if (reachedSetpoint && (time - setpointReachedTime) >= 2.0) {
-                ws.close();
-                showStatus('Target reached and stabilized', 'success');
+            // Continue monitoring even after reaching setpoint
+            if (reachedSetpoint && (time - setpointReachedTime) >= 3.0) {
+                const finalError = Math.abs(actualPosition - targetPosition);
+                if (finalError < stabilityThreshold) {
+                    ws.close();
+                    showStatus(`Target reached and stabilized at ${actualPosition.toFixed(2)}°`, 'success');
+                } else {
+                    // If stability is lost, continue monitoring
+                    reachedSetpoint = false;
+                    setpointReachedTime = null;
+                    stableCount = 0;
+                }
             }
         }
         
@@ -234,6 +253,7 @@
                 startTime = Date.now();
                 reachedSetpoint = false;
                 setpointReachedTime = null;
+                stableCount = 0;
             };
             
             ws.onmessage = (event) => {
@@ -266,6 +286,11 @@
                 ws.send(setpoint.toString());
                 showStatus('Setpoint sent successfully!', 'success');
                 
+                // Reset stability tracking
+                reachedSetpoint = false;
+                setpointReachedTime = null;
+                stableCount = 0;
+
                 setTimeout(() => {
                     document.getElementById('status').style.display = 'none';
                 }, 2000);
